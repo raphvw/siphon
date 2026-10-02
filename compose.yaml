@@ -1,0 +1,21 @@
+name: siphon
+services:
+  siphon:
+    image: siphon:0.5.0
+    build: .
+    container_name: siphon
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      CONFIG_PATH: /config/config.yaml
+      ALLOWED_DEST_ROOTS: /data
+      RUN_ON_START: "false"
+      SIPHON_USERNAME: ${SIPHON_USERNAME:-siphon}
+      SIPHON_PASSWORD: ${SIPHON_PASSWORD:?Set SIPHON_PASSWORD in .env}
+      SIPHON_ICON_URL: ${SIPHON_ICON_URL:-/icon.png}
+    volumes:
+      - ./config:/config
+      - ./output:/data
+    ports:
+      - "27686:8080"

@@ -1,0 +1,31 @@
+interval_minutes: 15
+jobs:
+  - id: wurm-camps
+    name: Wurm camp events
+    source: https://elevation.game.wurmonline.com/battles/server_feed.xml
+    destination: /data/camps.xml
+    handler: xml_event_filter
+    args:
+      - --max-time
+      - "30"
+    options:
+      record_tag: message
+      identity_fields:
+        - time
+        - text
+      filters:
+        - name: Camp appearance
+          field: text
+          match: regex
+          value: '\bbattle camp\b.*\bhas appeared\b'
+          ignore_case: true
+        - name: Camp claim
+          field: text
+          match: regex
+          value: '\bhas claimed battle camp\b'
+          ignore_case: true
+        - name: Secure victory
+          field: text
+          match: contains
+          value: secure victory
+          ignore_case: true

@@ -1,0 +1,21 @@
+name: siphon
+services:
+  siphon:
+    image: siphon:0.5.0
+    build:
+      context: /mnt/apps/Siphon
+      dockerfile: /mnt/apps/Siphon/Dockerfile
+    container_name: siphon
+    restart: unless-stopped
+    environment:
+      CONFIG_PATH: /config/config.yaml
+      ALLOWED_DEST_ROOTS: /data
+      RUN_ON_START: "false"
+      SIPHON_USERNAME: change-this-username
+      SIPHON_PASSWORD: change-this-to-a-long-random-password
+      SIPHON_ICON_URL: /icon.png
+    volumes:
+      - /mnt/apps/Siphon/config:/config
+      - /mnt/apps/Siphon/output:/data
+    ports:
+      - "27686:8080"

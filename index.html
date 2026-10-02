@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Siphon</title>
+  <link rel="icon" type="image/png" href="__SIPHON_ICON_URL__">
+  <style>
+    :root { color-scheme: light; font: 15px/1.45 system-ui, sans-serif; background: #f3f5f7; color: #17212b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { background: #162b3a; color: white; padding: 22px max(20px, calc((100vw - 1040px) / 2)); }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .brand img { width: 54px; height: 54px; object-fit: contain; }
+    header h1 { margin: 0; font-size: 1.45rem; }
+    header p { margin: 4px 0 0; color: #c8d7e1; }
+    main { max-width: 1040px; margin: 24px auto; padding: 0 16px 40px; }
+    .bar, .card { background: white; border: 1px solid #dbe2e7; border-radius: 10px; box-shadow: 0 2px 8px #17212b0a; }
+    .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 16px; margin-bottom: 16px; }
+    .bar label { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+    .bar input { width: 82px; }
+    button { border: 0; border-radius: 7px; padding: 9px 13px; color: white; background: #146c94; font: inherit; cursor: pointer; }
+    button.secondary { background: #526573; }
+    button.danger { background: #a64242; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .card { padding: 16px; margin: 12px 0; }
+    .card-head { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+    .card-head input { flex: 1; font-weight: 650; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label { display: block; font-weight: 600; color: #314350; }
+    input, select, textarea { display: block; width: 100%; margin-top: 5px; border: 1px solid #c9d4dc; border-radius: 6px; padding: 9px; font: inherit; color: #17212b; background: white; }
+    textarea { min-height: 76px; resize: vertical; font-family: ui-monospace, monospace; font-size: .9rem; }
+    .wide { grid-column: 1 / -1; }
+    .filter-list { grid-column: 1 / -1; border-top: 1px solid #e2e8ec; padding-top: 12px; }
+    .filter-row { display: grid; grid-template-columns: 1fr .8fr .8fr 2fr auto auto; gap: 8px; align-items: end; margin: 8px 0; }
+    .filter-row label { font-size: .9rem; }
+    .filter-row .case-label { display: flex; gap: 6px; align-items: center; padding-bottom: 10px; white-space: nowrap; }
+    .filter-row .case-label input { width: auto; margin: 0; }
+    .helper { color: #617381; font-size: .88rem; font-weight: 400; }
+    #notice { min-height: 24px; padding: 0 3px; }
+    #notice.error { color: #a12f2f; }
+    #notice.ok { color: #227347; }
+    .results { padding: 12px 16px; white-space: pre-wrap; overflow-wrap: anywhere; color: #394b58; }
+    @media (max-width: 760px) { .filter-row { grid-template-columns: 1fr 1fr; } .filter-list, .wide { grid-column: auto; } }
+    @media (max-width: 680px) { .grid { grid-template-columns: 1fr; } .filter-list, .wide { grid-column: auto; } .bar label { width: 100%; } }
+  </style>
+</head>
+<body>
+  <header><div class="brand"><img src="__SIPHON_ICON_URL__" alt="Siphon sponge logo"><div><h1>Siphon</h1><p>Manage scheduled downloads and special processing rules.</p></div></div></header>
+  <main>
+    <section class="bar">
+      <label>Run every <input id="interval" type="number" min="1" max="1440"> minutes</label>
+      <button id="add">Add file</button>
+      <button id="save">Save changes</button>
+      <button class="secondary" id="run">Run now</button>
+    </section>
+    <div id="notice" role="status"></div>
+    <section id="jobs" aria-live="polite"></section>
+    <section class="card"><strong>Latest run</strong><div id="results" class="results">No run yet.</div></section>
+  </main>
+  <script>
+    let config = { interval_minutes: 15, jobs: [] };
+    const $ = (q, parent = document) => parent.querySelector(q);
+    const notice = (message, kind = "") => { const el = $("#notice"); el.textContent = message; el.className = kind; };
+    const make = (tag, attrs = {}, text = "") => { const e = document.createElement(tag); Object.assign(e, attrs); e.textContent = text; return e; };
+    const blankJob = () => ({ id: `file-${Date.now().toString(36)}`, name: "New file", source: "https://", destination: "/data/new-file", handler: "download", args: [], options: {} });
+
+    async function request(path, options = {}) {
+      const response = await fetch(path, { credentials: "same-origin", ...options });
+      if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || response.statusText); }
+      return response.json();
+    }
+
+    function textField(job, key, labelText, placeholder = "") {
+      const label = make("label", {}, labelText);
+      const input = make("input", { value: job[key] || "", placeholder });
+      input.addEventListener("input", () => job[key] = input.value.trim());
+      label.append(input);
+      return label;
+    }
+
+    function appendRuleFields(row, rule, xml, onDelete) {
+      row.append(textField(rule, "name", "Name", "New filter"));
+      if (xml) row.append(textField(rule, "field", "XML field", "text"));
+      const matchLabel = make("label", {}, "Match");
+      const match = make("select");
+      [["contains", "Contains"], ["regex", "Regular expression"]].forEach(([value, title]) => match.append(make("option", { value }, title)));
+      match.value = rule.match || "contains";
+      match.addEventListener("change", () => rule.match = match.value);
+      matchLabel.append(match); row.append(matchLabel);
+      row.append(textField(rule, "value", xml ? "Value / pattern" : "Text / pattern", "text to find"));
+      const caseLabel = make("label", { className: "case-label" }, "Ignore case");
+      const checkbox = make("input", { type: "checkbox" }); checkbox.checked = rule.ignore_case !== false;
+      checkbox.addEventListener("change", () => rule.ignore_case = checkbox.checked);
+      caseLabel.append(checkbox); row.append(caseLabel);
+      const remove = make("button", { className: "danger", type: "button" }, "Delete");
+      remove.addEventListener("click", onDelete);
+      row.append(remove);
+    }
+
+    function renderXmlFilters(job, section) {
+      job.options ||= {};
+      job.options.record_tag ||= "message";
+      job.options.identity_fields ||= ["time", "text"];
+      job.options.filters ||= [];
+      job.options.filters.forEach(rule => { rule.field ||= "text"; });
+      section.append(make("div", { className: "helper" }, "Filters match XML record fields (attributes or child elements). Any matching rule qualifies; Siphon updates the destination only when it finds a matching record that is not already saved."));
+      const meta = make("div", { className: "grid" });
+      meta.append(textField(job.options, "record_tag", "XML record element", "message"));
+      const identity = make("label", {}, "Fields used to recognize a previously saved event");
+      const identityArea = make("textarea", { placeholder: "time\ntext" });
+      identityArea.value = (job.options.identity_fields || []).join("\n");
+      identityArea.addEventListener("input", () => job.options.identity_fields = identityArea.value.split("\n").map(v => v.trim()).filter(Boolean));
+      identity.append(identityArea); meta.append(identity); section.append(meta);
+
+      job.options.filters.forEach((rule, index) => {
+        const row = make("div", { className: "filter-row" });
+        appendRuleFields(row, rule, true, () => { job.options.filters.splice(index, 1); render(); });
+        section.append(row);
+      });
+    }
+
+    function renderContentFilters(job, section) {
+      job.options ||= {};
+      job.options.filters ||= [];
+      section.append(make("div", { className: "helper" }, "Filters search downloaded UTF-8 text. Any matching rule allows the file to replace the destination; with no match, the existing destination is kept. Text filters support files up to 8 MiB."));
+      job.options.filters.forEach((rule, index) => {
+        const row = make("div", { className: "filter-row" });
+        appendRuleFields(row, rule, false, () => { job.options.filters.splice(index, 1); render(); });
+        section.append(row);
+      });
+    }
+
+    function renderFilters(job, grid) {
+      const section = make("section", { className: "filter-list" });
+      section.append(make("strong", {}, "Filters"));
+      const label = make("label", {}, "Filter behavior");
+      const select = make("select");
+      [["download", "Copy every run"], ["content_filter", "Match downloaded text"], ["xml_event_filter", "Match new XML records"]].forEach(([value, title]) => select.append(make("option", { value }, title)));
+      select.value = job.handler || "download";
+      select.addEventListener("change", () => {
+        job.handler = select.value;
+        if (job.handler === "content_filter") job.options ||= { filters: [] };
+        if (job.handler === "xml_event_filter") job.options ||= { record_tag: "message", identity_fields: ["time", "text"], filters: [] };
+        render();
+      });
+      label.append(select); section.append(label);
+
+      if (job.handler === "content_filter") renderContentFilters(job, section);
+      if (job.handler === "xml_event_filter") renderXmlFilters(job, section);
+      if (job.handler === "download") section.append(make("div", { className: "helper" }, "No filter: Siphon copies this file on every run. Add a text filter to make copying conditional."));
+
+      const add = make("button", { className: "secondary", type: "button" }, "Add filter");
+      add.addEventListener("click", () => {
+        if (job.handler === "download") {
+          job.handler = "content_filter";
+          job.options = { filters: [] };
+        }
+        job.options ||= {};
+        job.options.filters ||= [];
+        const rule = { name: "New filter", match: "contains", value: "", ignore_case: true };
+        if (job.handler === "xml_event_filter") rule.field = "text";
+        job.options.filters.push(rule);
+        render();
+      });
+      section.append(add); grid.append(section);
+    }
+
+    function render() {
+      $("#interval").value = config.interval_minutes;
+      const host = $("#jobs"); host.replaceChildren();
+      config.jobs.forEach((job, index) => {
+        const card = make("article", { className: "card" });
+        const head = make("div", { className: "card-head" });
+        const name = make("input", { value: job.name || "", ariaLabel: "Job name" });
+        name.addEventListener("input", () => job.name = name.value.trim());
+        head.append(name);
+        const remove = make("button", { className: "danger", type: "button" }, "Remove");
+        remove.addEventListener("click", () => { config.jobs.splice(index, 1); render(); });
+        head.append(remove); card.append(head);
+        const grid = make("div", { className: "grid" });
+        grid.append(textField(job, "source", "Origin URL", "https://example.com/file.txt"));
+        grid.append(textField(job, "destination", "Destination path and new filename", "/data/file.txt"));
+        const args = make("label", { className: "wide" }, "Extra curl arguments (one argument per line)");
+        const area = make("textarea", { placeholder: "--max-time\n30" }); area.value = (job.args || []).join("\n");
+        area.addEventListener("input", () => job.args = area.value.split("\n").map(v => v.trim()).filter(Boolean));
+        args.append(area);
+        args.append(make("span", { className: "helper" }, "Arguments are passed separately; output path, URL, headers and credentials stay controlled by the app."));
+        grid.append(args);
+        renderFilters(job, grid);
+        card.append(grid); host.append(card);
+      });
+    }
+
+    async function load() {
+      try {
+        config = await request("/api/config");
+        config.jobs ||= [];
+        render();
+        await status();
+      } catch (error) { notice(error.message, "error"); }
+    }
+
+    async function status() {
+      const s = await request("/api/status");
+      const text = s.results?.length ? s.results.map(r => `${r.status.toUpperCase()}  ${r.id}: ${r.message}`).join("\n") : "No run yet.";
+      $("#results").textContent = `${s.running ? "A run is in progress.\n" : ""}${s.last_run ? `Last run: ${s.last_run}\n` : ""}${text}`;
+    }
+
+    $("#interval").addEventListener("input", e => config.interval_minutes = Number(e.target.value));
+    $("#add").addEventListener("click", () => { config.jobs.push(blankJob()); render(); });
+    $("#save").addEventListener("click", async e => {
+      const button = e.currentTarget; button.disabled = true;
+      try { const saved = await request("/api/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config) }); config = saved.config; render(); notice("Configuration saved.", "ok"); }
+      catch (error) { notice(error.message, "error"); }
+      finally { button.disabled = false; }
+    });
+    $("#run").addEventListener("click", async e => {
+      const button = e.currentTarget; button.disabled = true; notice("Running configured jobs…");
+      try { await request("/api/run", { method: "POST" }); await status(); notice("Run complete.", "ok"); }
+      catch (error) { notice(error.message, "error"); }
+      finally { button.disabled = false; }
+    });
+    load();
+    setInterval(() => status().catch(() => {}), 5000);
+  </script>
+</body>
+</html>
