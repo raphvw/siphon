@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+config/config.yaml
+config/*.local.yaml
+output/*
+!output/.gitkeep
+__pycache__/
+*.py[cod]
+.DS_Store
